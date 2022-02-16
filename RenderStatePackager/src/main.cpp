@@ -61,6 +61,7 @@ ParseStatus ParseCommandLine(int argc, char* argv[], ParsingEnvironmentCreateInf
 
     args::Group ArchiveDeviceFlags(Parser, "Archive Flags:", args::Group::Validators::DontCare);
     args::Flag  ArgumentArchiveFlagStrip(ArchiveDeviceFlags, "strip_reflection", "Strip Shader Reflection", {"strip_reflection"});
+    args::Flag  ArgumentArchiveDumpBytecode(ArchiveDeviceFlags, "dump_bytecode", "Dump bytecode", {"dump_bytecode"});
 
     try
     {
@@ -100,6 +101,7 @@ ParseStatus ParseCommandLine(int argc, char* argv[], ParsingEnvironmentCreateInf
 
     CreateInfo.DeviceFlags     = GetDeviceFlagsFromParser();
     CreateInfo.PSOArchiveFlags = ArgumentArchiveFlagStrip ? PSO_ARCHIVE_FLAG_STRIP_REFLECTION : PSO_ARCHIVE_FLAG_NONE;
+    CreateInfo.IsDumpBytecode  = ArgumentArchiveDumpBytecode;
     CreateInfo.ShaderDirs      = args::get(ArgumentShaderDirs);
     CreateInfo.RenderStateDirs = args::get(ArgumentRenderStateDirs);
     CreateInfo.ConfigFilePath  = args::get(ArgumentDeviceConfig);

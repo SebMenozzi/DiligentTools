@@ -25,24 +25,158 @@
  */
 
 #include "RenderStatePackager.hpp"
+
+#include "BasicMath.hpp"
 #include "DefaultRawMemoryAllocator.hpp"
 #include "DynamicLinearAllocator.hpp"
+#include "SerializedPipelineState.h"
+#include "FileSystem.hpp"
+#include "DataBlobImpl.hpp"
+#include "FileStream.h"
+#include <FileWrapper.hpp>
 
 namespace Diligent
 {
+
+struct BytecodeDumper
+{
+    struct WorkingDirectoryScope
+    {
+        WorkingDirectoryScope(const Char* FilePath)
+        {
+            if (!FileSystem::PathExists(FilePath))
+                FileSystem::CreateDirectory(FilePath);
+
+            FileSystem::SetWorkingDirectory(FilePath);
+        }
+
+        ~WorkingDirectoryScope()
+        {
+            FileSystem::SetWorkingDirectory("../");
+        }
+    };
+
+    static bool Execute(const std::vector<RefCntAutoPtr<IPipelineState>>& Pipelines, ARCHIVE_DEVICE_DATA_FLAGS DeviceFlags)
+    {
+        auto GetDeviceFlagName = [](ARCHIVE_DEVICE_DATA_FLAGS Flag) {
+            switch (Flag)
+            {
+                case ARCHIVE_DEVICE_DATA_FLAG_D3D11:
+                    return "D3D11";
+                case ARCHIVE_DEVICE_DATA_FLAG_D3D12:
+                    return "D3D12";
+                case ARCHIVE_DEVICE_DATA_FLAG_GL:
+                    return "GL";
+                case ARCHIVE_DEVICE_DATA_FLAG_GLES:
+                    return "GLES";
+                case ARCHIVE_DEVICE_DATA_FLAG_VULKAN:
+                    return "Vulkan";
+                case ARCHIVE_DEVICE_DATA_FLAG_METAL_MACOS:
+                    return "Metal_MacOS";
+                case ARCHIVE_DEVICE_DATA_FLAG_METAL_IOS:
+                    return "Metal_IOS";
+                default:
+                    UNEXPECTED("Unexpected device data flag");
+                    return "Unknown";
+            }
+        };
+
+        auto GetPipelineTypeName = [](PIPELINE_TYPE Flag) {
+            switch (Flag)
+            {
+                case PIPELINE_TYPE_MESH:
+                    return "Mesh";
+                case PIPELINE_TYPE_GRAPHICS:
+                    return "Graphics";
+                case PIPELINE_TYPE_COMPUTE:
+                    return "Compute";
+                case PIPELINE_TYPE_TILE:
+                    return "Tile";
+                case PIPELINE_TYPE_RAY_TRACING:
+                    return "RayTracing";
+                default:
+                    UNEXPECTED("Unexpected pipeline type");
+                    return "Unknown";
+            }
+        };
+
+        try
+        {
+            WorkingDirectoryScope WorkingDirectory{"BytecodeDump"};
+
+            for (auto Flags = DeviceFlags; Flags != ARCHIVE_DEVICE_DATA_FLAG_NONE;)
+            {
+                const auto            Flag = ExtractLSB(Flags);
+                WorkingDirectoryScope DeviceDirectory{GetDeviceFlagName(Flag)};
+                for (auto& pPipeline : Pipelines)
+                {
+
+                    auto ShaderStagesIterate = [](auto pPSO, auto DeviceFlag, auto ShadeTypes) {
+                        WorkingDirectoryScope PipelineDirectory{pPSO->GetDesc().Name};
+                        for (SHADER_TYPE ShaderFlags = ShadeTypes; ShaderFlags != SHADER_TYPE_UNKNOWN;)
+                        {
+                            const auto ShaderType = ExtractLSB(ShaderFlags);
+
+                            const auto ShaderCI = pPSO.Cast<ISerializedPipelineState>(IID_SerializedPipelineState)->GetPatchedShaderCreateInfo(DeviceFlag, ShaderType);
+                            if (ShaderCI.Desc.Name != nullptr)
+                            {
+                                FileWrapper File{ShaderCI.Desc.Name, EFileAccessMode::Overwrite};
+                                if (!File)
+                                    LOG_FATAL_ERROR_AND_THROW("Failed to open file: '", ShaderCI.Desc.Name, "'.");
+
+                                File->Write(ShaderCI.ByteCode, ShaderCI.ByteCodeSize);
+                            }
+                        }
+                    };
+
+                    const auto            PipelineType = pPipeline->GetDesc().PipelineType;
+                    WorkingDirectoryScope PipelineTypeDirectory{GetPipelineTypeName(PipelineType)};
+                    switch (PipelineType)
+                    {
+                        case PIPELINE_TYPE_MESH:
+                            ShaderStagesIterate(pPipeline, Flag, SHADER_TYPE_ALL_MESH);
+                            break;
+                        case PIPELINE_TYPE_GRAPHICS:
+                            ShaderStagesIterate(pPipeline, Flag, SHADER_TYPE_ALL_GRAPHICS);
+                            break;
+                        case PIPELINE_TYPE_COMPUTE:
+                            ShaderStagesIterate(pPipeline, Flag, SHADER_TYPE_COMPUTE);
+                            break;
+                        case PIPELINE_TYPE_TILE:
+                            ShaderStagesIterate(pPipeline, Flag, SHADER_TYPE_TILE);
+                            break;
+                        case PIPELINE_TYPE_RAY_TRACING:
+                            ShaderStagesIterate(pPipeline, Flag, SHADER_TYPE_ALL_RAY_TRACING);
+                            break;
+                        default:
+                            UNEXPECTED("Unexpected pipeline type");
+                    }
+                }
+            }
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+};
+
 
 RenderStatePackager::RenderStatePackager(RefCntAutoPtr<ISerializationDevice>            pDevice,
                                          RefCntAutoPtr<IShaderSourceInputStreamFactory> pShaderStreamFactory,
                                          RefCntAutoPtr<IShaderSourceInputStreamFactory> pRenderStateStreamFactory,
                                          RefCntAutoPtr<IThreadPool>                     pThreadPool,
                                          ARCHIVE_DEVICE_DATA_FLAGS                      DeviceFlags,
-                                         PSO_ARCHIVE_FLAGS                              PSOArchiveFlags) :
+                                         PSO_ARCHIVE_FLAGS                              PSOArchiveFlags,
+                                         bool                                           IsDumbBytecode) :
     m_pDevice{pDevice},
     m_pShaderStreamFactory{pShaderStreamFactory},
     m_pRenderStateStreamFactory{pRenderStateStreamFactory},
     m_pThreadPool{pThreadPool},
     m_DeviceFlags{DeviceFlags},
-    m_PSOArchiveFlags{PSOArchiveFlags}
+    m_PSOArchiveFlags{PSOArchiveFlags},
+    m_IsDumpBytecode{IsDumbBytecode}
 {
 }
 
@@ -323,6 +457,9 @@ bool RenderStatePackager::Execute(RefCntAutoPtr<IArchiver> pArchive)
         for (auto& pPipeline : Pipelines)
             if (!pArchive->AddPipelineState(pPipeline))
                 LOG_ERROR_AND_THROW("Failed to archive pipeline '", pPipeline->GetDesc().Name, "'.");
+
+        if (m_IsDumpBytecode && !BytecodeDumper::Execute(Pipelines, m_DeviceFlags))
+            LOG_ERROR_AND_THROW("Failed to dump the bytecode");
     }
     catch (...)
     {

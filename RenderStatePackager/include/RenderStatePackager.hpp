@@ -47,7 +47,8 @@ public:
                         RefCntAutoPtr<IShaderSourceInputStreamFactory> pRenderStateStreamFactory,
                         RefCntAutoPtr<IThreadPool>                     pThreadPool,
                         ARCHIVE_DEVICE_DATA_FLAGS                      DeviceFlags,
-                        PSO_ARCHIVE_FLAGS                              PSOArchiveFlags);
+                        PSO_ARCHIVE_FLAGS                              PSOArchiveFlags,
+                        bool                                           IsDumpBytecode);
 
     bool ParseFiles(std::vector<std::string> const& DRSNPaths);
 
@@ -71,6 +72,7 @@ private:
 
     const ARCHIVE_DEVICE_DATA_FLAGS m_DeviceFlags;
     const PSO_ARCHIVE_FLAGS         m_PSOArchiveFlags;
+    const bool                      m_IsDumpBytecode;
 };
 
 } // namespace Diligent
